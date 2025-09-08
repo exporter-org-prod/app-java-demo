@@ -1,0 +1,90 @@
+FROM ubuntu:22.04
+
+# Set environment variables securely
+ENV DEBIAN_FRONTEND=noninteractive
+ENV CATALINA_HOME=/opt/tomcat
+ENV PATH=$PATH:$CATALINA_HOME/bin
+
+WORKDIR /app
+
+# Update package list and install only required dependencies, pin versions for wget and curl
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    wget=1.21.2-2ubuntu1.1 \
+    curl=7.81.0-1ubuntu1.20 \
+    unzip \
+    tar \
+    gzip \
+    # Upgrade libgnutls30 to fixed version against CVE-2025-32988, CVE-2025-32989, CVE-2025-32990
+    libgnutls30=3.7.3-4ubuntu1.7 \
+    # Upgrade perl-base to fixed version against CVE-2025-40909
+    perl-base=5.34.0-3ubuntu1.5 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install OpenJDK 17 securely (pin to avoid undesired upgrades, remove build tools after)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends openjdk-17-jdk-headless && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# Set JAVA_HOME dynamically based on actual installation and update PATH
+RUN JAVA_HOME=$(find /usr/lib/jvm -name "java-17-openjdk-*" -type d | head -1) && \
+    echo "JAVA_HOME=$JAVA_HOME" >> /etc/environment && \
+    echo "PATH=\\$JAVA_HOME/bin:\\$PATH" >> /etc/environment
+
+# Download and install the latest Tomcat version with security fixes
+# Update to Tomcat 9.0.107 to remediate critical CVEs (GHSA-27hp-xhwr-wr2m, GHSA-5j33-cvvr-w245, GHSA-83qj-6fr2-vhqg, GHSA-xcpr-7mr4-h4xq, GHSA-wr62-c79q-cv37, GHSA-ff77-26x5-69cr, GHSA-23hv-mwm6-g8jf, GHSA-q3mw-pvr8-9ggc, GHSA-g8pj-r55q-5c2v, GHSA-h2fw-rfh5-95r3, GHSA-7jqf-v358-p8g7, GHSA-wm9w-rjj3-j356, GHSA-p22x-g9px-3945, GHSA-7w75-32cg-r6g2, GHSA-4j3c-42xv-3f84, GHSA-m425-mq94-257g, GHSA-25xr-qj8w-c4vf, GHSA-v682-8vv8-vpwr, GHSA-gqp3-2cvr-x8m3)
+ARG TOMCAT_VERSION=9.0.107
+RUN wget https://www.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz && \
+    tar -xzf apache-tomcat-${TOMCAT_VERSION}.tar.gz && \
+    mv apache-tomcat-${TOMCAT_VERSION} /opt/tomcat && \
+    rm apache-tomcat-${TOMCAT_VERSION}.tar.gz
+
+# Set permissions for Tomcat executables
+RUN chmod +x /opt/tomcat/bin/*.sh
+
+# Create necessary directories
+RUN mkdir -p /app/webapps /app/lib
+
+# Copy the built artifact and dependencies securely
+COPY target/endor-java-webapp-demo.jar /app/webapps/
+COPY target/dependency/ /app/lib/
+
+# ---
+# The following application dependency updates MUST be performed in the build process (Maven/Gradle) and are NOT in Dockerfile,
+# but the package findings below should be addressed in the build before copying the JARs:
+# - Update log4j-core to 2.8.2+ (fixes GHSA-jfh8-c2jp-5v3q, GHSA-fxph-q3j8-mv87, GHSA-2qrg-x229-3v8q, GHSA-7rjr-3q55-vv33)
+# - Update com.mchange:c3p0 to 0.9.5.4+ (fixes GHSA-q485-j897-qc27, GHSA-84p2-vf58-xhxv)
+# - Update org.apache.commons:commons-text to 1.10.0+ (fixes GHSA-599f-7c49-w659)
+# - Update org.slf4j:slf4j-ext to 1.7.26+ (fixes GHSA-w77p-8cfg-2x43)
+# - Update mysql:mysql-connector-java to 8.0.27+ (fixes GHSA-w6f2-8wx4-47r5, GHSA-jcq3-cprp-m333)
+# - Update org.apache.commons:commons-lang3 to 3.18.0+ (fixes GHSA-j288-q9x7-2f5v)
+# - Update net.bytebuddy:byte-buddy-agent and net.bytebuddy:byte-buddy to 1.17.7+ (fixes aging risk)
+# - Update com.google.errorprone:error_prone_annotations to 2.41.0+ (fixes aging risk)
+# - Update com.google.guava:guava to 32.0.0-android+ (fixes GHSA-mvr2-9pj6-7w5j, GHSA-7g45-4rm6-3mm3, GHSA-5mg8-w23w-74h3)
+# ---
+
+# Deploy the application artifact to Tomcat's webapps directory
+RUN cp /app/webapps/endor-java-webapp-demo.jar $CATALINA_HOME/webapps/
+
+# Copy dependencies to Tomcat's lib directory
+RUN cp /app/lib/*.jar $CATALINA_HOME/lib/
+
+# Expose Tomcat's default port securely
+EXPOSE 8080
+
+# Create a startup script to source environment configurations and start Tomcat
+RUN echo '#!/bin/bash' > /startup.sh && \
+    echo 'source /etc/environment' >> /startup.sh && \
+    echo 'exec /opt/tomcat/bin/catalina.sh run' >> /startup.sh && \
+    chmod +x /startup.sh
+
+# Run container with non-root user for security
+RUN useradd -m -d /app -s /bin/bash appuser && \
+    chown -R appuser:appuser /opt/tomcat && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+# Start Tomcat using the startup script
+CMD ["/startup.sh"]

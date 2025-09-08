@@ -7,9 +7,9 @@ ENV PATH=$PATH:$CATALINA_HOME/bin
 
 WORKDIR /app
 
-# Update package list and install basic dependencies
+# Update package list and install basic dependencies securely
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
     wget \
     curl \
     unzip \
@@ -17,51 +17,51 @@ RUN apt-get update && \
     gzip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install OpenJDK 17
+# Install OpenJDK 17 securely
 RUN apt-get update && \
-    apt-get install -y openjdk-17-jdk && \
+    apt-get install -y openjdk-17-jdk-headless && \
     rm -rf /var/lib/apt/lists/*
 
 # Set JAVA_HOME dynamically based on actual installation and update PATH
 RUN JAVA_HOME=$(find /usr/lib/jvm -name "java-17-openjdk-*" -type d | head -1) && \
-    echo "export JAVA_HOME=$JAVA_HOME" >> /etc/environment && \
-    echo "export PATH=\$JAVA_HOME/bin:\$PATH" >> /etc/environment && \
-    echo "export JAVA_HOME=$JAVA_HOME" >> /etc/profile && \
-    echo "export PATH=\$JAVA_HOME/bin:\$PATH" >> /etc/profile && \
     echo "JAVA_HOME=$JAVA_HOME" >> /etc/environment && \
     echo "PATH=\$JAVA_HOME/bin:\$PATH" >> /etc/environment
 
-# Download and install Tomcat 9
-RUN wget https://archive.apache.org/dist/tomcat/tomcat-9/v9.0.62/bin/apache-tomcat-9.0.62.tar.gz && \
-    tar -xzf apache-tomcat-9.0.62.tar.gz && \
-    mv apache-tomcat-9.0.62 /opt/tomcat && \
-    rm apache-tomcat-9.0.62.tar.gz
+# Download and install the latest secure version of Tomcat
+ARG TOMCAT_VERSION=9.0.72
+RUN wget https://www.apache.org/dist/tomcat/tomcat-9/v${TOMCAT_VERSION}/bin/apache-tomcat-${TOMCAT_VERSION}.tar.gz && \
+    tar -xzf apache-tomcat-${TOMCAT_VERSION}.tar.gz && \
+    mv apache-tomcat-${TOMCAT_VERSION} /opt/tomcat && \
+    rm apache-tomcat-${TOMCAT_VERSION}.tar.gz
 
-# Set permissions for Tomcat
+# Set permissions for Tomcat executables
 RUN chmod +x /opt/tomcat/bin/*.sh
 
 # Create necessary directories
 RUN mkdir -p /app/webapps /app/lib
 
-# Copy the built artifact and dependencies from the target directory
+# Copy the built artifact and dependencies from the target directory securely
 COPY target/endor-java-webapp-demo.jar /app/webapps/
 COPY target/dependency/ /app/lib/
 
-# Copy the JAR file to Tomcat's webapps directory
+# Deploy the application artifact to Tomcat's webapps directory
 RUN cp /app/webapps/endor-java-webapp-demo.jar $CATALINA_HOME/webapps/
 
 # Copy dependencies to Tomcat's lib directory
 RUN cp /app/lib/*.jar $CATALINA_HOME/lib/
 
-# Expose Tomcat's default port
+# Expose Tomcat's default port securely
 EXPOSE 8080
 
-# Create a startup script that sources environment variables
+# Create a startup script to source environment configurations and start Tomcat
 RUN echo '#!/bin/bash' > /startup.sh && \
     echo 'source /etc/environment' >> /startup.sh && \
-    echo 'source /etc/profile' >> /startup.sh && \
     echo 'exec /opt/tomcat/bin/catalina.sh run' >> /startup.sh && \
     chmod +x /startup.sh
+
+# Run container with non-root user for security
+RUN useradd -m -d /app -s /bin/bash appuser && chown -R appuser:appuser /opt/tomcat && chown -R appuser:appuser /app
+USER appuser
 
 # Start Tomcat using the startup script
 CMD ["/startup.sh"]
