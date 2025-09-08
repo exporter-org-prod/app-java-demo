@@ -1,67 +1,33 @@
-FROM ubuntu:22.04
+FROM openjdk:17-slim
 
 # Set environment variables
 ENV DEBIAN_FRONTEND=noninteractive
-ENV CATALINA_HOME=/opt/tomcat
-ENV PATH=$PATH:$CATALINA_HOME/bin
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 WORKDIR /app
 
 # Update package list and install basic dependencies
 RUN apt-get update && \
-    apt-get install -y \
+    apt-get install -y --no-install-recommends \
     wget \
     curl \
     unzip \
     tar \
-    gzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Install OpenJDK 17
-RUN apt-get update && \
-    apt-get install -y openjdk-17-jdk && \
-    rm -rf /var/lib/apt/lists/*
+# Using a secure and specific version
+RUN wget --no-verbose -O openjdk.tar.gz https://download.java.net/java/GA/jdk17.0.2/dfd4a8d0985749f896bed50d7138ee7f/8/GPL/openjdk-17.0.2_linux-x64_bin.tar.gz && \
+    echo '0022753d0cceecacdd3a795dd4cea2bd7ffdf9dc06e22ffd1be98411742fbb44  openjdk.tar.gz' | sha256sum --check && \
+    mkdir -p $JAVA_HOME && \
+    tar -xzf openjdk.tar.gz --strip-components=1 -C $JAVA_HOME && \
+    rm openjdk.tar.gz && \
+    apt-get purge -y --auto-remove -o APT::AutoRemove::RecommendsImportant=false
 
-# Set JAVA_HOME dynamically based on actual installation and update PATH
-RUN JAVA_HOME=$(find /usr/lib/jvm -name "java-17-openjdk-*" -type d | head -1) && \
-    echo "export JAVA_HOME=$JAVA_HOME" >> /etc/environment && \
-    echo "export PATH=\$JAVA_HOME/bin:\$PATH" >> /etc/environment && \
-    echo "export JAVA_HOME=$JAVA_HOME" >> /etc/profile && \
-    echo "export PATH=\$JAVA_HOME/bin:\$PATH" >> /etc/profile && \
-    echo "JAVA_HOME=$JAVA_HOME" >> /etc/environment && \
-    echo "PATH=\$JAVA_HOME/bin:\$PATH" >> /etc/environment
+# Use non-root user for security
+RUN useradd -m appuser
+USER appuser
 
-# Download and install Tomcat 9
-RUN wget https://archive.apache.org/dist/tomcat/tomcat-9/v9.0.62/bin/apache-tomcat-9.0.62.tar.gz && \
-    tar -xzf apache-tomcat-9.0.62.tar.gz && \
-    mv apache-tomcat-9.0.62 /opt/tomcat && \
-    rm apache-tomcat-9.0.62.tar.gz
-
-# Set permissions for Tomcat
-RUN chmod +x /opt/tomcat/bin/*.sh
-
-# Create necessary directories
-RUN mkdir -p /app/webapps /app/lib
-
-# Copy the built artifact and dependencies from the target directory
-COPY target/endor-java-webapp-demo.jar /app/webapps/
-COPY target/dependency/ /app/lib/
-
-# Copy the JAR file to Tomcat's webapps directory
-RUN cp /app/webapps/endor-java-webapp-demo.jar $CATALINA_HOME/webapps/
-
-# Copy dependencies to Tomcat's lib directory
-RUN cp /app/lib/*.jar $CATALINA_HOME/lib/
-
-# Expose Tomcat's default port
+# Expose the port for Tomcat
 EXPOSE 8080
-
-# Create a startup script that sources environment variables
-RUN echo '#!/bin/bash' > /startup.sh && \
-    echo 'source /etc/environment' >> /startup.sh && \
-    echo 'source /etc/profile' >> /startup.sh && \
-    echo 'exec /opt/tomcat/bin/catalina.sh run' >> /startup.sh && \
-    chmod +x /startup.sh
-
-# Start Tomcat using the startup script
-CMD ["/startup.sh"]
